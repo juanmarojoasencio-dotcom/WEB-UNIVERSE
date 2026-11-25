@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
-  CalendarPlus, BellPlus, Megaphone, Trash2, Loader2, CheckCircle2, AlertCircle, ImagePlus,
+  CalendarPlus, BellPlus, Megaphone, Trash2, Pencil, Loader2, CheckCircle2, AlertCircle, ImagePlus, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { uploadImage } from '@/lib/storage';
@@ -68,6 +68,24 @@ export default function CreatorPanelPage() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [notifs, setNotifs] = useState<NotificationRow[]>([]);
   const [events, setEvents] = useState<UniEvent[]>([]);
+
+  // Edit notification modal
+  const [editingNotif, setEditingNotif] = useState<NotificationRow | null>(null);
+  const [editNotifBrand, setEditNotifBrand] = useState('');
+  const [editNotifMessage, setEditNotifMessage] = useState('');
+  const [editNotifImageFile, setEditNotifImageFile] = useState<File | null>(null);
+  const [editNotifImagePreview, setEditNotifImagePreview] = useState<string | null>(null);
+  const [savingNotif, setSavingNotif] = useState(false);
+
+  // Edit ad modal
+  const [editingAd, setEditingAd] = useState<Ad | null>(null);
+  const [editAdBrand, setEditAdBrand] = useState('');
+  const [editAdTitle, setEditAdTitle] = useState('');
+  const [editAdDescription, setEditAdDescription] = useState('');
+  const [editAdDiscount, setEditAdDiscount] = useState('');
+  const [editAdImageUrl, setEditAdImageUrl] = useState('');
+  const [editAdLink, setEditAdLink] = useState('');
+  const [savingAdEdit, setSavingAdEdit] = useState(false);
 
   const loadLists = useCallback(async () => {
     const [adsRes, notifsRes, eventsRes] = await Promise.all([
@@ -161,6 +179,52 @@ export default function CreatorPanelPage() {
     }
   };
 
+  const openEditNotification = (n: NotificationRow) => {
+    setEditingNotif(n);
+    setEditNotifBrand(n.brand ?? '');
+    setEditNotifMessage(n.message);
+    setEditNotifImageFile(null);
+    setEditNotifImagePreview(n.image_url ?? null);
+  };
+
+  const handleUpdateNotification = async () => {
+    if (!editingNotif || !editNotifBrand.trim() || !editNotifMessage.trim() || savingNotif) return;
+    setSavingNotif(true);
+    let imageUrl = editingNotif.image_url ?? null;
+    if (editNotifImageFile) {
+      const uploaded = await uploadImage(editNotifImageFile, 'notifications');
+      if (!uploaded) {
+        setSavingNotif(false);
+        showFeedback('error', 'No se pudo subir la imagen. Inténtalo de nuevo.');
+        return;
+      }
+      imageUrl = uploaded;
+    }
+    const { error } = await supabase
+      .from('notifications')
+      .update({
+        brand: editNotifBrand.trim(),
+        title: editNotifBrand.trim(),
+        message: editNotifMessage.trim(),
+        image_url: imageUrl,
+      })
+      .eq('id', editingNotif.id);
+    setSavingNotif(false);
+    if (error) {
+      showFeedback('error', 'No se pudo actualizar la notificación.');
+      return;
+    }
+    setNotifs((prev) =>
+      prev.map((n) =>
+        n.id === editingNotif.id
+          ? { ...n, brand: editNotifBrand.trim(), title: editNotifBrand.trim(), message: editNotifMessage.trim(), image_url: imageUrl }
+          : n,
+      ),
+    );
+    setEditingNotif(null);
+    showFeedback('ok', 'Notificación actualizada. Los estudiantes verán los cambios al instante.');
+  };
+
   const handlePublishAd = async () => {
     if (!adBrand.trim() || !adTitle.trim() || !adDescription.trim() || savingAd) return;
     setSavingAd(true);
@@ -190,6 +254,54 @@ export default function CreatorPanelPage() {
     } else {
       showFeedback('error', 'No se pudo eliminar el anuncio.');
     }
+  };
+
+  const openEditAd = (a: Ad) => {
+    setEditingAd(a);
+    setEditAdBrand(a.brand);
+    setEditAdTitle(a.title);
+    setEditAdDescription(a.description);
+    setEditAdDiscount(a.discount ?? '');
+    setEditAdImageUrl(a.image_url ?? '');
+    setEditAdLink(a.link ?? '');
+  };
+
+  const handleUpdateAd = async () => {
+    if (!editingAd || !editAdBrand.trim() || !editAdTitle.trim() || !editAdDescription.trim() || savingAdEdit) return;
+    setSavingAdEdit(true);
+    const { error } = await supabase
+      .from('ads')
+      .update({
+        brand: editAdBrand.trim(),
+        title: editAdTitle.trim(),
+        description: editAdDescription.trim(),
+        discount: editAdDiscount.trim() || null,
+        image_url: editAdImageUrl.trim() || null,
+        link: editAdLink.trim() || null,
+      })
+      .eq('id', editingAd.id);
+    setSavingAdEdit(false);
+    if (error) {
+      showFeedback('error', 'No se pudo actualizar el anuncio.');
+      return;
+    }
+    setAds((prev) =>
+      prev.map((a) =>
+        a.id === editingAd.id
+          ? {
+              ...a,
+              brand: editAdBrand.trim(),
+              title: editAdTitle.trim(),
+              description: editAdDescription.trim(),
+              discount: editAdDiscount.trim() || null,
+              image_url: editAdImageUrl.trim() || null,
+              link: editAdLink.trim() || null,
+            }
+          : a,
+      ),
+    );
+    setEditingAd(null);
+    showFeedback('ok', 'Anuncio actualizado. Visible al instante para toda la comunidad.');
   };
 
   return (
@@ -388,6 +500,13 @@ export default function CreatorPanelPage() {
                       <p className="truncate text-xs text-ink-400">{n.message}</p>
                     </div>
                     <button
+                      onClick={() => openEditNotification(n)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-700/40 hover:text-ink-100"
+                      aria-label={`Modificar notificación ${n.title}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={() => handleDeleteNotification(n.id)}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-crimson-500/10 hover:text-crimson-600"
                       aria-label={`Eliminar notificación ${n.title}`}
@@ -459,6 +578,13 @@ export default function CreatorPanelPage() {
                       <p className="truncate text-xs text-ink-400">{a.title}{a.discount ? ` · ${a.discount}` : ''}</p>
                     </div>
                     <button
+                      onClick={() => openEditAd(a)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-700/40 hover:text-ink-100"
+                      aria-label={`Modificar anuncio ${a.brand}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={() => handleDeleteAd(a.id)}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-crimson-500/10 hover:text-crimson-600"
                       aria-label={`Eliminar anuncio ${a.brand}`}
@@ -471,6 +597,131 @@ export default function CreatorPanelPage() {
             )}
           </div>
         </>
+      )}
+
+      {/* Edit notification modal */}
+      {editingNotif && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-ink-950/60 backdrop-blur-sm" onClick={() => setEditingNotif(null)} />
+          <div className="relative max-h-[85vh] w-full max-w-lg animate-slide-up overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl scrollbar-thin">
+            <button
+              onClick={() => setEditingNotif(null)}
+              className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-850 hover:text-ink-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <h3 className="font-display text-lg font-bold text-ink-100">Modificar notificación</h3>
+            <p className="mt-1 text-sm text-ink-400">
+              Los cambios se reflejarán al instante en la campana de los estudiantes.
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className={labelClass}>Nombre del local / colaborador</label>
+                <input className={inputClass} value={editNotifBrand} onChange={(e) => setEditNotifBrand(e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>Texto pequeño ({editNotifMessage.length}/140)</label>
+                <textarea
+                  className={`${inputClass} min-h-[60px] resize-y`}
+                  value={editNotifMessage}
+                  maxLength={140}
+                  onChange={(e) => setEditNotifMessage(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Imagen pequeña</label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-ink-700/40 bg-ink-850/40 px-4 py-3 transition-colors hover:border-crimson-400/40">
+                  <ImagePlus className="h-4 w-4 shrink-0 text-crimson-600" />
+                  <span className="text-xs text-ink-400">
+                    {editNotifImageFile ? editNotifImageFile.name : editNotifImagePreview ? 'Mantener imagen actual o subir una nueva' : 'Sube una imagen desde tu dispositivo'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setEditNotifImageFile(file);
+                      setEditNotifImagePreview(file ? URL.createObjectURL(file) : (editingNotif.image_url ?? null));
+                    }}
+                  />
+                </label>
+                {editNotifImagePreview && (
+                  <img src={editNotifImagePreview} alt="Vista previa" className="mt-3 h-20 w-20 rounded-xl object-cover" />
+                )}
+              </div>
+              <button
+                onClick={handleUpdateNotification}
+                disabled={!editNotifBrand.trim() || !editNotifMessage.trim() || savingNotif}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-crimson-500 to-crimson-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:from-crimson-400 hover:to-crimson-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingNotif ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+                Guardar cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit ad modal */}
+      {editingAd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-ink-950/60 backdrop-blur-sm" onClick={() => setEditingAd(null)} />
+          <div className="relative max-h-[85vh] w-full max-w-lg animate-slide-up overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl scrollbar-thin">
+            <button
+              onClick={() => setEditingAd(null)}
+              className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-850 hover:text-ink-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <h3 className="font-display text-lg font-bold text-ink-100">Modificar anuncio</h3>
+            <p className="mt-1 text-sm text-ink-400">
+              Los cambios se aplicarán al instante en el espacio de ofertas.
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass}>Marca / Local</label>
+                  <input className={inputClass} value={editAdBrand} onChange={(e) => setEditAdBrand(e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>Título de la oferta</label>
+                  <input className={inputClass} value={editAdTitle} onChange={(e) => setEditAdTitle(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className={labelClass}>Descripción</label>
+                <textarea className={`${inputClass} min-h-[80px] resize-y`} value={editAdDescription} onChange={(e) => setEditAdDescription(e.target.value)} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelClass}>Código / Descuento</label>
+                  <input className={inputClass} value={editAdDiscount} onChange={(e) => setEditAdDiscount(e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>Banner / Imagen</label>
+                  <input className={inputClass} value={editAdImageUrl} onChange={(e) => setEditAdImageUrl(e.target.value)} placeholder="https://..." />
+                </div>
+                <div>
+                  <label className={labelClass}>Enlace (opcional)</label>
+                  <input className={inputClass} value={editAdLink} onChange={(e) => setEditAdLink(e.target.value)} placeholder="https://..." />
+                </div>
+              </div>
+              <button
+                onClick={handleUpdateAd}
+                disabled={!editAdBrand.trim() || !editAdTitle.trim() || !editAdDescription.trim() || savingAdEdit}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-crimson-500 to-crimson-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:from-crimson-400 hover:to-crimson-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingAdEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+                Guardar cambios
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

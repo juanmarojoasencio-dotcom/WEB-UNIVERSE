@@ -5,6 +5,7 @@ export interface Post {
   content: string;
   likes: number;
   created_at: string;
+  author_email?: string | null;
 }
 
 export interface Group {
@@ -44,6 +45,8 @@ export interface Chat {
   unread: number;
   chat_type: ChatType;
   member_count: number;
+  user_email?: string | null;
+  peer_email?: string | null;
 }
 
 export interface Message {
@@ -51,6 +54,7 @@ export interface Message {
   chat_id: string;
   sender_name: string;
   sender_avatar: string;
+  sender_email: string | null;
   content: string;
   is_me: boolean;
   created_at: string;

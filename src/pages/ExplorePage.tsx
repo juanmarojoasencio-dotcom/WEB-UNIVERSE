@@ -6,8 +6,7 @@ import {
   PLAN_TAGS,
   GROUP_TAGS,
 } from '@/lib/session';
-import { supabase } from '@/lib/supabase';
-import type { StartChatTarget } from '@/App';
+import { ensurePrivateChat, fetchMyProfile, fetchPeerByEmail, canonicalPrivateChatId } from '@/lib/chatHelpers';
 
 const FACULTIES = ['FCom', 'Reina Mercedes', 'Ramón y Cajal', 'Viapol', 'Cartuja'];
 const COURSES = US_COURSES as readonly string[];
@@ -33,21 +32,18 @@ const EMPTY_FILTERS: Filters = {
 };
 
 interface ExplorePageProps {
-  onStartChat: (target: StartChatTarget) => void;
+  onStartChat: (chatId: string) => void;
   currentUserEmail: string;
 }
 
-function getInitials(name: string): string {
-  return name.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-}
-
 export default function ExplorePage({ onStartChat, currentUserEmail }: ExplorePageProps) {
-  const { profile } = useSession();
+  const { profile, isCreator } = useSession();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   const [users, setUsers] = useState<DiscoverUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [startingChat, setStartingChat] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -102,35 +98,33 @@ export default function ExplorePage({ onStartChat, currentUserEmail }: ExplorePa
 
   const handleChat = async (user: DiscoverUser) => {
     if (startingChat) return;
+    setChatError(null);
     setStartingChat(user.id);
-    const chatId = `pm_${[currentUserEmail, user.email ?? user.id].map((s) => s.toLowerCase()).sort().join('_')}`;
-    const { data: existing } = await supabase
-      .from('chats')
-      .select('chat_id')
-      .eq('chat_id', chatId)
-      .maybeSingle();
-    if (!existing) {
-      await supabase.from('chats').insert({
-        chat_id: chatId,
-        contact_name: user.name,
-        contact_avatar: user.avatar || getInitials(user.name),
-        contact_faculty: user.faculty,
-        last_message: 'Inicia la conversación',
-        last_time: 'Ahora',
-        unread: 0,
-        chat_type: 'private',
-        member_count: 2,
-        user_email: currentUserEmail,
-        peer_email: user.email ?? null,
-      });
+    try {
+      const myProfile = await fetchMyProfile(currentUserEmail);
+      if (!myProfile) {
+        setChatError('No se pudo cargar tu perfil. Completa tu perfil e inténtalo de nuevo.');
+        setStartingChat(null);
+        return;
+      }
+      const peerProfile = await fetchPeerByEmail(user.email);
+      if (!peerProfile) {
+        setChatError('No se encontró el perfil del estudiante seleccionado.');
+        setStartingChat(null);
+        return;
+      }
+      const chat = await ensurePrivateChat(currentUserEmail, myProfile, user.email, peerProfile);
+      if (!chat) {
+        setChatError('No se pudo crear la conversación. Inténtalo de nuevo.');
+        setStartingChat(null);
+        return;
+      }
+      onStartChat(canonicalPrivateChatId(currentUserEmail, user.email));
+    } catch {
+      setChatError('Ocurrió un error al iniciar el chat.');
+    } finally {
+      setStartingChat(null);
     }
-    setStartingChat(null);
-    onStartChat({
-      chatId,
-      contactName: user.name,
-      contactAvatar: user.avatar || getInitials(user.name),
-      contactFaculty: user.faculty,
-    });
   };
 
   return (
@@ -233,6 +227,12 @@ export default function ExplorePage({ onStartChat, currentUserEmail }: ExplorePa
         </p>
       </div>
 
+      {chatError && (
+        <div className="mt-3 rounded-xl border border-crimson-400/40 bg-crimson-500/10 px-4 py-3 text-xs font-medium text-crimson-600">
+          {chatError}
+        </div>
+      )}
+
       {/* User cards */}
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {loading ? (
@@ -296,7 +296,7 @@ export default function ExplorePage({ onStartChat, currentUserEmail }: ExplorePa
                   </div>
                 )}
 
-                {!isMe && (
+                {!isMe && !isCreator && (
                   <div className="mt-3 border-t border-ink-800/50 pt-3">
                     <button
                       onClick={() => handleChat(user)}
@@ -361,3 +361,5 @@ function Chip({ children, icon }: { children: React.ReactNode; icon?: React.Reac
     </span>
   );
 }
+
+

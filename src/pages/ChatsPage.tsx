@@ -1,23 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Send, Search, ArrowLeft, Loader2, MessageCircle, MoreVertical, Pencil, Trash2,
-  Check, X, Users, UserCircle,
+  Check, X, Users, UserCircle, Sparkles,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Chat, Message, ChatType } from '@/types';
-
-const AUTO_REPLIES = [
-  '¡Sí, claro! Cuento con ello 👍',
-  'Jajaja qué buena idea',
-  '¿Quedamos en la facultad entonces?',
-  'Voy a revisarlo y te cuento',
-  'Genial, apúntame',
-  'No te preocupes, lo entiendo',
-  '¿A qué hora quedamos?',
-  'Perfecto, allí nos vemos',
-  'Mándame un DM con los detalles',
-  'Estoy de acuerdo contigo',
-];
+import type { Chat, Message } from '@/types';
+import { useSession } from '@/lib/session';
+import { useUnread } from '@/lib/unread';
 
 type ChatTab = 'private' | 'group';
 
@@ -28,7 +17,6 @@ const SENDER_COLOR_PALETTE = [
   'from-blue-500 to-blue-700',
   'from-rose-500 to-rose-700',
   'from-teal-500 to-teal-700',
-  'from-indigo-500 to-indigo-700',
 ];
 
 const colorCache: Record<string, string> = {};
@@ -42,19 +30,36 @@ const getSenderColor = (name: string): string => {
   return colorCache[name];
 };
 
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) {
+      return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return 'Ayer';
+    return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 interface ChatsPageProps {
   onNavigateGroups?: () => void;
   onNavigateExplore?: () => void;
-  initialChat?: {
-    chatId: string;
-    contactName: string;
-    contactAvatar: string;
-    contactFaculty: string;
-  };
+  initialChatId?: string;
   onChatOpened?: () => void;
 }
 
-export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initialChat, onChatOpened }: ChatsPageProps) {
+export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initialChatId, onChatOpened }: ChatsPageProps) {
+  const { session, profile } = useSession();
+  const myEmail = session?.email ?? '';
+  const myName = profile?.fullName ?? 'Tú';
+  const { byChat: unreadByChat, markRead } = useUnread();
+
   const [activeTab, setActiveTab] = useState<ChatTab>('private');
   const [chats, setChats] = useState<Chat[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -63,24 +68,31 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
   const [msgLoading, setMsgLoading] = useState(true);
   const [input, setInput] = useState('');
   const [search, setSearch] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [openMessageMenu, setOpenMessageMenu] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [showMembers, setShowMembers] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const fetchChats = useCallback(async () => {
+    if (!myEmail) { setLoading(false); return; }
     setLoading(true);
-    const { data, error } = await supabase.from('chats').select('*');
+    const { data, error } = await supabase
+      .from('chats')
+      .select('*')
+      .or(`user_email.eq.${myEmail},peer_email.eq.${myEmail}`);
     if (error) {
       console.error('Error fetching chats:', error);
     } else if (data) {
-      setChats(data as Chat[]);
+      const mine = (data as Chat[]).filter((c) => c.user_email === myEmail);
+      setChats(mine);
     }
     setLoading(false);
-  }, []);
+  }, [myEmail]);
 
   const fetchMessages = useCallback(async (chatId: string) => {
     setMsgLoading(true);
@@ -101,45 +113,88 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
     fetchChats();
   }, [fetchChats]);
 
+  // Realtime subscription for chats
   useEffect(() => {
-    if (!initialChat) return;
-    setActiveTab('private');
-    const ensureAndOpen = async () => {
-      const { data: existing } = await supabase
-        .from('chats')
-        .select('chat_id')
-        .eq('chat_id', initialChat.chatId)
-        .maybeSingle();
-      if (!existing) {
-        await supabase.from('chats').insert({
-          chat_id: initialChat.chatId,
-          contact_name: initialChat.contactName,
-          contact_avatar: initialChat.contactAvatar,
-          contact_faculty: initialChat.contactFaculty,
-          last_message: 'Inicia la conversación',
-          last_time: 'Ahora',
-          unread: 0,
-          chat_type: 'private',
-          member_count: 2,
-        });
-      }
+    if (!myEmail) return;
+    const channel = supabase
+      .channel('chats_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, (payload) => {
+        const row = payload.new as Record<string, unknown> | null;
+        if (!row) return;
+        const rowUserEmail = String(row.user_email ?? '');
+        if (rowUserEmail === myEmail) {
+          fetchChats();
+        }
+      })
+      .subscribe();
+    channelRef.current = channel;
+    return () => {
+      supabase.removeChannel(channel);
+      channelRef.current = null;
+    };
+  }, [myEmail, fetchChats]);
+
+  // Handle initialChatId from Explore "Chatear" or Communities "Abrir chat"
+  useEffect(() => {
+    if (!initialChatId) return;
+    setActiveTab(initialChatId.startsWith('grp_') ? 'group' : 'private');
+    const open = async () => {
       await fetchChats();
-      setActiveChatId(initialChat.chatId);
+      setActiveChatId(initialChatId);
+      markRead(initialChatId);
       onChatOpened?.();
     };
-    ensureAndOpen();
+    open();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialChat]);
+  }, [initialChatId]);
 
+  // Fetch messages when active chat changes
   useEffect(() => {
     if (activeChatId) {
       fetchMessages(activeChatId);
+    } else {
+      setMessages([]);
     }
   }, [activeChatId, fetchMessages]);
+
+  // Realtime subscription for messages of the active chat
+  useEffect(() => {
+    if (!activeChatId) return;
+    const channel = supabase
+      .channel(`messages_${activeChatId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${activeChatId}` }, (payload) => {
+        const newMsg = payload.new as Message;
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${activeChatId}` }, (payload) => {
+        const updated = payload.new as Message;
+        setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `chat_id=eq.${activeChatId}` }, (payload) => {
+        const oldId = (payload.old as Record<string, unknown>)?.id;
+        if (!oldId) return;
+        setMessages((prev) => prev.filter((m) => m.id !== oldId));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeChatId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // While a chat is open, incoming messages count as read immediately
+  useEffect(() => {
+    if (activeChatId && messages.length > 0) {
+      markRead(activeChatId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId, messages.length]);
 
   useEffect(() => {
     if (activeChatId) {
@@ -149,8 +204,9 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
 
   const privateChats = chats.filter((c) => (c.chat_type ?? 'private') === 'private');
   const groupChats = chats.filter((c) => c.chat_type === 'group');
-  const privateUnread = privateChats.reduce((sum, c) => sum + (c.unread || 0), 0);
-  const groupUnread = groupChats.reduce((sum, c) => sum + (c.unread || 0), 0);
+  const chatUnread = (c: Chat): number => unreadByChat[c.chat_id] ?? 0;
+  const privateUnread = privateChats.reduce((sum, c) => sum + chatUnread(c), 0);
+  const groupUnread = groupChats.reduce((sum, c) => sum + chatUnread(c), 0);
 
   const currentList = activeTab === 'private' ? privateChats : groupChats;
   const filteredChats = currentList.filter((c) =>
@@ -160,65 +216,70 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
   const activeChat = chats.find((c) => c.chat_id === activeChatId);
   const isGroupChat = activeChat?.chat_type === 'group';
 
+  const isMyMessage = (msg: Message): boolean => {
+    if (msg.sender_email) return msg.sender_email === myEmail;
+    return msg.is_me;
+  };
+
   const handleSend = async () => {
     if (!input.trim() || !activeChatId) return;
     const content = input.trim();
     setInput('');
+    setSendError(null);
+
+    const myAvatar = profile?.fullName
+      ? profile.fullName.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
+      : 'YO';
 
     const { data, error } = await supabase
       .from('messages')
       .insert({
         chat_id: activeChatId,
-        sender_name: 'Tú',
-        sender_avatar: 'TÚ',
+        sender_name: myName,
+        sender_avatar: myAvatar,
+        sender_email: myEmail,
         content,
-        is_me: true,
+        is_me: false,
       })
       .select()
       .single();
 
-    if (!error && data) {
-      setMessages((prev) => [...prev, data as Message]);
+    if (error) {
+      console.error('Error sending message:', error);
+      setSendError('No se pudo enviar el mensaje. Inténtalo de nuevo.');
+      setInput(content);
+      return;
     }
+
+    if (data) {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === (data as Message).id)) return prev;
+        return [...prev, data as Message];
+      });
+    }
+
+    const now = new Date().toISOString();
+    const timeLabel = formatTime(now);
+    await supabase
+      .from('chats')
+      .update({ last_message: content, last_time: timeLabel })
+      .eq('chat_id', activeChatId)
+      .eq('user_email', myEmail);
 
     const activeChatLocal = chats.find((c) => c.chat_id === activeChatId);
-    if (activeChatLocal) {
+    if (activeChatLocal && activeChatLocal.peer_email && !isGroupChat) {
       await supabase
         .from('chats')
-        .update({ last_message: content, last_time: 'Ahora', unread: 0 })
-        .eq('id', activeChatLocal.id);
+        .update({ last_message: content, last_time: timeLabel, unread: (activeChatLocal.unread || 0) + 1 })
+        .eq('chat_id', activeChatId)
+        .eq('user_email', activeChatLocal.peer_email);
+    } else if (isGroupChat) {
+      await supabase
+        .from('chats')
+        .update({ last_message: content, last_time: timeLabel })
+        .eq('chat_id', activeChatId)
+        .neq('user_email', myEmail);
     }
-
-    setIsTyping(true);
-    setTimeout(async () => {
-      setIsTyping(false);
-      const reply = AUTO_REPLIES[Math.floor(Math.random() * AUTO_REPLIES.length)];
-      const chat = chats.find((c) => c.chat_id === activeChatId);
-      const senderName = isGroupChat
-        ? pickGroupSender(chat?.contact_name ?? '')
-        : chat?.contact_name || 'Usuario';
-      const senderAvatar = senderName.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-      const { data: replyData } = await supabase
-        .from('messages')
-        .insert({
-          chat_id: activeChatId,
-          sender_name: senderName,
-          sender_avatar: senderAvatar,
-          content: reply,
-          is_me: false,
-        })
-        .select()
-        .single();
-      if (replyData) {
-        setMessages((prev) => [...prev, replyData as Message]);
-        if (chat) {
-          await supabase
-            .from('chats')
-            .update({ last_message: `${senderName.split(' ')[0]}: ${reply}`, last_time: 'Ahora' })
-            .eq('id', chat.id);
-        }
-      }
-    }, 1800 + Math.random() * 1200);
   };
 
   const startEditing = (message: Message) => {
@@ -240,7 +301,7 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
       .from('messages')
       .update({ content })
       .eq('id', messageId)
-      .eq('is_me', true);
+      .eq('sender_email', myEmail);
 
     if (error) {
       console.error('Error updating message:', error);
@@ -258,28 +319,16 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
       .from('messages')
       .delete()
       .eq('id', message.id)
-      .eq('is_me', true);
+      .eq('sender_email', myEmail);
 
     if (error) {
       console.error('Error deleting message:', error);
       return;
     }
 
-    const remainingMessages = messages.filter((item) => item.id !== message.id);
-    setMessages(remainingMessages);
+    setMessages((prev) => prev.filter((item) => item.id !== message.id));
     setDeletingMessageId(null);
     setOpenMessageMenu(null);
-
-    if (activeChat && remainingMessages.length > 0 && remainingMessages[remainingMessages.length - 1].id === message.id) {
-      const lastMessage = remainingMessages[remainingMessages.length - 1];
-      await supabase
-        .from('chats')
-        .update({ last_message: lastMessage.content })
-        .eq('id', activeChat.id);
-      setChats((prev) => prev.map((chat) => (
-        chat.id === activeChat.id ? { ...chat, last_message: lastMessage.content } : chat
-      )));
-    }
   };
 
   return (
@@ -336,9 +385,9 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
                 <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-ink-850/60 border border-ink-700/30">
                   <MessageCircle className="h-8 w-8 text-ink-500" />
                 </div>
-                <p className="mt-4 text-sm font-medium text-ink-200">Aún no tienes chats privados</p>
-                <p className="mt-1 max-w-[220px] text-xs text-ink-400">
-                  Explora estudiantes de tu facultad o intereses para iniciar tu primera conversación
+                <p className="mt-4 text-sm font-medium text-ink-200">No tienes chats privados todavía</p>
+                <p className="mt-1 max-w-[240px] text-xs text-ink-400">
+                  Entra en Explorar y pulsa «Chatear» con cualquier estudiante para iniciar una conversación
                 </p>
                 <a
                   href="#"
@@ -354,7 +403,10 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
             filteredChats.map((chat) => (
               <button
                 key={chat.id}
-                onClick={() => setActiveChatId(chat.chat_id)}
+                onClick={() => {
+                  setActiveChatId(chat.chat_id);
+                  markRead(chat.chat_id);
+                }}
                 className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
                   activeChatId === chat.chat_id
                     ? 'bg-crimson-500/5 border-l-2 border-crimson-500'
@@ -380,9 +432,9 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-ink-400 truncate">{chat.last_message}</span>
-                    {chat.unread > 0 && (
+                    {chatUnread(chat) > 0 && (
                       <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-crimson-500 px-1.5 text-[10px] font-bold text-white">
-                        {chat.unread}
+                        {chatUnread(chat)}
                       </span>
                     )}
                   </div>
@@ -419,14 +471,17 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold text-ink-100">{activeChat.contact_name}</h3>
               {isGroupChat ? (
-                <p className="flex items-center gap-1 text-[10px] text-ink-400">
+                <button
+                  onClick={() => setShowMembers(true)}
+                  className="flex items-center gap-1 rounded-lg px-1 py-0.5 text-[10px] text-ink-400 transition-colors hover:bg-ink-850/40 hover:text-crimson-600"
+                >
                   <Users className="h-3 w-3" />
-                  {activeChat.member_count} participantes · {activeChat.contact_faculty}
-                </p>
+                  {activeChat.member_count} participantes · ver integrantes
+                </button>
               ) : (
-                <p className="flex items-center gap-1 text-[10px] text-emerald-400">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                  En línea · {activeChat.contact_faculty}
+                <p className="flex items-center gap-1 text-[10px] text-ink-400">
+                  <GraduationCapSmall className="h-3 w-3 text-crimson-600" />
+                  {activeChat.contact_faculty}
                 </p>
               )}
             </div>
@@ -438,136 +493,140 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
               <div className="flex justify-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin text-crimson-500" />
               </div>
+            ) : messages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-ink-850/40 border border-ink-700/30">
+                  <Sparkles className="h-6 w-6 text-crimson-500/60" />
+                </div>
+                <p className="mt-3 text-sm font-medium text-ink-300">Envía el primer mensaje para romper el hielo</p>
+                <p className="mt-1 max-w-[220px] text-xs text-ink-400">
+                  Escribe algo abajo y pulsa enviar para empezar a hablar con {activeChat.contact_name}
+                </p>
+              </div>
             ) : (
               <div className="mx-auto max-w-2xl space-y-3">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.is_me ? 'justify-end' : 'justify-start'} animate-slide-up`}
-                  >
-                    {!msg.is_me && (
-                      <div className={`mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${getSenderColor(msg.sender_name)} text-[10px] font-bold text-white`}>
-                        {msg.sender_avatar}
-                      </div>
-                    )}
-                    <div className={`relative flex max-w-[75%] items-start gap-1 ${msg.is_me ? 'flex-row-reverse' : ''}`}>
-                      {msg.is_me && editingMessageId !== msg.id && (
-                        <button
-                          onClick={() => setOpenMessageMenu(openMessageMenu === msg.id ? null : msg.id)}
-                          className="mt-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-400 opacity-0 transition-all hover:bg-ink-850 hover:text-ink-200 group-hover:opacity-100 focus:opacity-100"
-                          aria-label="Opciones del mensaje"
-                        >
-                          <MoreVertical className="h-4 w-4" />
-                        </button>
+                {messages.map((msg) => {
+                  const mine = isMyMessage(msg);
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex ${mine ? 'justify-end' : 'justify-start'} animate-slide-up`}
+                    >
+                      {!mine && (
+                        <div className={`mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${getSenderColor(msg.sender_name)} text-[10px] font-bold text-white`}>
+                          {msg.sender_avatar}
+                        </div>
                       )}
-                      <div className="relative">
-                        {editingMessageId === msg.id ? (
-                          <div className="min-w-[220px] rounded-2xl rounded-br-sm border border-crimson-400/40 bg-white p-2 shadow-lg">
-                            <textarea
-                              value={editContent}
-                              onChange={(e) => setEditContent(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault();
-                                  saveEditedMessage(msg.id);
-                                }
-                                if (e.key === 'Escape') cancelEditing();
-                              }}
-                              autoFocus
-                              rows={2}
-                              className="w-full resize-none bg-transparent px-2 py-1 text-sm text-ink-200 focus:outline-none"
-                            />
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={cancelEditing}
-                                className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-850 hover:text-ink-200"
-                                aria-label="Cancelar edición"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                              <button
-                                onClick={() => saveEditedMessage(msg.id)}
-                                disabled={!editContent.trim()}
-                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-crimson-500 text-white hover:bg-crimson-400 disabled:opacity-40"
-                                aria-label="Guardar edición"
-                              >
-                                <Check className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
+                      <div className={`relative flex max-w-[75%] items-start gap-1 ${mine ? 'flex-row-reverse' : ''}`}>
+                        {mine && editingMessageId !== msg.id && (
                           <button
-                            onClick={() => msg.is_me && setOpenMessageMenu(openMessageMenu === msg.id ? null : msg.id)}
-                            className={`block text-left ${msg.is_me ? 'cursor-pointer' : 'cursor-default'}`}
+                            onClick={() => setOpenMessageMenu(openMessageMenu === msg.id ? null : msg.id)}
+                            className="mt-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-400 opacity-0 transition-all hover:bg-ink-850 hover:text-ink-200 group-hover:opacity-100 focus:opacity-100"
+                            aria-label="Opciones del mensaje"
                           >
-                            {isGroupChat && !msg.is_me && (
-                              <p className="mb-0.5 px-1 text-[10px] font-semibold text-ink-300">{msg.sender_name}</p>
-                            )}
-                            <div
-                              className={`rounded-2xl px-4 py-2.5 text-sm ${
-                                msg.is_me
-                                  ? 'bg-gradient-to-br from-crimson-500 to-crimson-600 text-white rounded-br-sm shadow-lg shadow-crimson-500/10'
-                                  : 'bg-ink-800/60 text-ink-200 rounded-bl-sm border border-ink-700/30'
-                              }`}
-                            >
-                              {msg.content}
-                            </div>
+                            <MoreVertical className="h-4 w-4" />
                           </button>
                         )}
-                        {openMessageMenu === msg.id && msg.is_me && editingMessageId !== msg.id && (
-                          <div className="absolute right-0 top-full z-10 mt-1 w-36 overflow-hidden rounded-xl border border-ink-700/40 bg-white p-1 shadow-xl">
+                        <div className="relative">
+                          {editingMessageId === msg.id ? (
+                            <div className="min-w-[220px] rounded-2xl rounded-br-sm border border-crimson-400/40 bg-white p-2 shadow-lg">
+                              <textarea
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    saveEditedMessage(msg.id);
+                                  }
+                                  if (e.key === 'Escape') cancelEditing();
+                                }}
+                                autoFocus
+                                rows={2}
+                                className="w-full resize-none bg-transparent px-2 py-1 text-sm text-ink-200 focus:outline-none"
+                              />
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={cancelEditing}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-850 hover:text-ink-200"
+                                  aria-label="Cancelar edición"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => saveEditedMessage(msg.id)}
+                                  disabled={!editContent.trim()}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg bg-crimson-500 text-white hover:bg-crimson-400 disabled:opacity-40"
+                                  aria-label="Guardar edición"
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
                             <button
-                              onClick={() => startEditing(msg)}
-                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-ink-300 transition-colors hover:bg-ink-850 hover:text-ink-100"
+                              onClick={() => mine && setOpenMessageMenu(openMessageMenu === msg.id ? null : msg.id)}
+                              className={`block text-left ${mine ? 'cursor-pointer' : 'cursor-default'}`}
                             >
-                              <Pencil className="h-3.5 w-3.5 text-crimson-600" />
-                              Editar
-                            </button>
-                            <button
-                              onClick={() => { setOpenMessageMenu(null); setDeletingMessageId(msg.id); }}
-                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-crimson-600 transition-colors hover:bg-crimson-500/10"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Eliminar
-                            </button>
-                          </div>
-                        )}
-                        {deletingMessageId === msg.id && (
-                          <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-xl border border-ink-700/40 bg-white p-3 shadow-xl">
-                            <p className="text-xs font-medium text-ink-200">¿Eliminar este mensaje?</p>
-                            <p className="mt-1 text-[10px] text-ink-400">Esta acción no se puede deshacer.</p>
-                            <div className="mt-3 flex justify-end gap-2">
-                              <button
-                                onClick={() => setDeletingMessageId(null)}
-                                className="rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-ink-400 hover:bg-ink-850"
+                              {isGroupChat && !mine && (
+                                <p className="mb-0.5 px-1 text-[10px] font-semibold text-ink-300">{msg.sender_name}</p>
+                              )}
+                              <div
+                                className={`rounded-2xl px-4 py-2.5 text-sm ${
+                                  mine
+                                    ? 'bg-gradient-to-br from-crimson-500 to-crimson-600 text-white rounded-br-sm shadow-lg shadow-crimson-500/10'
+                                    : 'bg-ink-800/60 text-ink-200 rounded-bl-sm border border-ink-700/30'
+                                }`}
                               >
-                                Cancelar
+                                {msg.content}
+                              </div>
+                              <p className={`mt-0.5 px-1 text-[9px] text-ink-400 ${mine ? 'text-right' : ''}`}>
+                                {formatTime(msg.created_at)}
+                              </p>
+                            </button>
+                          )}
+                          {openMessageMenu === msg.id && mine && editingMessageId !== msg.id && (
+                            <div className="absolute right-0 top-full z-10 mt-1 w-36 overflow-hidden rounded-xl border border-ink-700/40 bg-white p-1 shadow-xl">
+                              <button
+                                onClick={() => startEditing(msg)}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-ink-300 transition-colors hover:bg-ink-850 hover:text-ink-100"
+                              >
+                                <Pencil className="h-3.5 w-3.5 text-crimson-600" />
+                                Editar
                               </button>
                               <button
-                                onClick={() => deleteMessage(msg)}
-                                className="rounded-lg bg-crimson-500 px-2.5 py-1.5 text-[10px] font-semibold text-white hover:bg-crimson-400"
+                                onClick={() => { setOpenMessageMenu(null); setDeletingMessageId(msg.id); }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-crimson-600 transition-colors hover:bg-crimson-500/10"
                               >
+                                <Trash2 className="h-3.5 w-3.5" />
                                 Eliminar
                               </button>
                             </div>
-                          </div>
-                        )}
+                          )}
+                          {deletingMessageId === msg.id && (
+                            <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-xl border border-ink-700/40 bg-white p-3 shadow-xl">
+                              <p className="text-xs font-medium text-ink-200">¿Eliminar este mensaje?</p>
+                              <p className="mt-1 text-[10px] text-ink-400">Esta acción no se puede deshacer.</p>
+                              <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                  onClick={() => setDeletingMessageId(null)}
+                                  className="rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-ink-400 hover:bg-ink-850"
+                                >
+                                  Cancelar
+                                </button>
+                                <button
+                                  onClick={() => deleteMessage(msg)}
+                                  className="rounded-lg bg-crimson-500 px-2.5 py-1.5 text-[10px] font-semibold text-white hover:bg-crimson-400"
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                {isTyping && (
-                  <div className="flex justify-start animate-slide-up">
-                    <div className="mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-ink-300 to-ink-500 text-[10px] font-bold text-white">
-                      ...
-                    </div>
-                    <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-ink-800/60 px-4 py-3 border border-ink-700/30">
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-ink-500 [animation-delay:-0.3s]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-ink-500 [animation-delay:-0.15s]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-ink-500" />
-                    </div>
-                  </div>
-                )}
+                  );
+                })}
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -575,6 +634,9 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
 
           {/* Input */}
           <div className="border-t border-ink-800 bg-white/60 p-4 backdrop-blur-xl">
+            {sendError && (
+              <p className="mb-2 text-center text-[11px] font-medium text-crimson-600">{sendError}</p>
+            )}
             <div className="mx-auto flex max-w-2xl items-center gap-2">
               <input
                 ref={inputRef}
@@ -603,6 +665,14 @@ export default function ChatsPage({ onNavigateGroups, onNavigateExplore, initial
           <h3 className="mt-4 font-display text-lg font-bold text-ink-200">Selecciona un chat</h3>
           <p className="mt-1 text-sm text-ink-400">Elige una conversación para empezar a hablar</p>
         </div>
+      )}
+
+      {showMembers && activeChat && (
+        <GroupMembersModal
+          chatId={activeChat.chat_id}
+          groupName={activeChat.contact_name}
+          onClose={() => setShowMembers(false)}
+        />
       )}
     </div>
   );
@@ -665,7 +735,136 @@ function EmptyGroups({ onNavigateGroups }: { onNavigateGroups?: () => void }) {
   );
 }
 
-const GROUP_SENDER_NAMES = ['Compañero A', 'Compañero B', 'Compañero C', 'Compañero D', 'Compañero E'];
-function pickGroupSender(_chatName: string): string {
-  return GROUP_SENDER_NAMES[Math.floor(Math.random() * GROUP_SENDER_NAMES.length)];
+function GraduationCapSmall({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+      <path d="M6 12v5c3 3 9 3 12 0v-5" />
+    </svg>
+  );
+}
+
+export interface GroupMemberInfo {
+  email: string;
+  name: string;
+  initials: string;
+  degree: string;
+  course: string;
+  isCreator: boolean;
+}
+
+export function GroupMembersModal({
+  chatId,
+  groupName,
+  onClose,
+}: {
+  chatId: string;
+  groupName: string;
+  onClose: () => void;
+}) {
+  const [members, setMembers] = useState<GroupMemberInfo[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: memberRows } = await supabase
+        .from('chat_members')
+        .select('user_email')
+        .eq('chat_id', chatId);
+
+      const emails = [...new Set((memberRows ?? []).map((m) => m.user_email))];
+      if (emails.length === 0) {
+        if (!cancelled) setMembers([]);
+        return;
+      }
+
+      const { data: profileRows } = await supabase
+        .from('profiles')
+        .select('email, full_name, degree, course')
+        .in('email', emails);
+
+      const profileMap = new Map(
+        (profileRows ?? []).map((p) => [String(p.email), p as Record<string, string>]),
+      );
+
+      // Resolve creator from the group row (grp_<uuid> chat ids)
+      let creatorEmail: string | null = null;
+      if (chatId.startsWith('grp_')) {
+        const { data: group } = await supabase
+          .from('groups')
+          .select('creator_email')
+          .eq('id', chatId.replace('grp_', ''))
+          .maybeSingle();
+        creatorEmail = group?.creator_email ?? null;
+      }
+
+      const list: GroupMemberInfo[] = emails.map((email) => {
+        const p = profileMap.get(email);
+        const name = String(p?.full_name ?? email.split('@')[0]);
+        return {
+          email,
+          name,
+          initials: getInitialsFromName(name),
+          degree: String(p?.degree ?? '—'),
+          course: String(p?.course ?? '—'),
+          isCreator: creatorEmail === email,
+        };
+      });
+      list.sort((a, b) => Number(b.isCreator) - Number(a.isCreator) || a.name.localeCompare(b.name));
+      if (!cancelled) setMembers(list);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-ink-950/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative max-h-[80vh] w-full max-w-md animate-slide-up overflow-hidden rounded-2xl bg-white p-6 shadow-2xl">
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-850 hover:text-ink-200"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <h3 className="font-display text-lg font-bold text-ink-100">Integrantes</h3>
+        <p className="mt-0.5 text-sm text-ink-400">{groupName}</p>
+
+        <div className="mt-4 max-h-[50vh] space-y-2 overflow-y-auto scrollbar-thin pr-1">
+          {members === null ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-crimson-500" />
+            </div>
+          ) : members.length === 0 ? (
+            <p className="py-8 text-center text-sm text-ink-400">No hay integrantes registrados todavía.</p>
+          ) : (
+            members.map((m) => (
+              <div key={m.email} className="flex items-center gap-3 rounded-xl border border-ink-700/30 bg-ink-850/30 px-3 py-2.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-crimson-500 to-gold-500 text-xs font-bold text-white">
+                  {m.initials}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-ink-100">{m.name}</p>
+                    {m.isCreator && (
+                      <span className="shrink-0 rounded-full bg-gold-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-gold-700">
+                        Creador
+                      </span>
+                    )}
+                  </div>
+                  <p className="truncate text-xs text-ink-400">{m.degree} · {m.course}</p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getInitialsFromName(name: string): string {
+  return name.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 }
