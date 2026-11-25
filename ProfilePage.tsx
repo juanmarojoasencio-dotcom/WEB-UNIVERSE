@@ -5,6 +5,7 @@ import {
   Settings, Shield, LogOut, Pencil, X, Coffee, Target,
 } from 'lucide-react';
 import { useSession, US_DEGREES, US_COURSES, US_CLASS_GROUPS, PLAN_TAGS, GROUP_TAGS, GOAL_TAGS, type UserProfile } from '@/lib/session';
+import { useUserStats } from '@/lib/useUserStats';
 
 type ProfileSection = 'datos' | 'ajustes' | 'privacidad';
 
@@ -16,19 +17,20 @@ interface ProfileExtras {
 
 const FACULTIES = ['FCom', 'Reina Mercedes', 'Ramón y Cajal', 'Viapol', 'Cartuja'];
 
-const STATS = [
-  { label: 'Publicaciones', value: 12, icon: MessageCircle },
-  { label: 'Me gusta dados', value: 87, icon: Heart },
-  { label: 'Grupos activos', value: 5, icon: Users },
-  { label: 'Eventos confirmados', value: 3, icon: CalendarDays },
-];
-
 export default function ProfilePage() {
   const { session, profile, signOut, updateProfile } = useSession();
+  const userStats = useUserStats(session?.email);
   const [section, setSection] = useState<ProfileSection>('datos');
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const STATS = [
+    { label: 'Publicaciones', value: userStats.posts, icon: MessageCircle },
+    { label: 'Me gusta dados', value: userStats.likes, icon: Heart },
+    { label: 'Grupos activos', value: userStats.groups, icon: Users },
+    { label: 'Eventos confirmados', value: userStats.events, icon: CalendarDays },
+  ];
 
   const [draft, setDraft] = useState<UserProfile | null>(profile);
   const [extras, setExtras] = useState<ProfileExtras>({

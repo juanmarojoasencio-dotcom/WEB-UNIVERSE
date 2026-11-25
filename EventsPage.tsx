@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CalendarDays, Clock, MapPin, Check, Loader2, Users, PartyPopper, Mic, Dumbbell, BookOpen, Plus, X, ImagePlus, AlertCircle } from 'lucide-react';
+import { CalendarDays, Clock, MapPin, Check, Loader2, Users, PartyPopper, Mic, Dumbbell, BookOpen, Plus, X, ImagePlus, AlertCircle, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { uploadImage } from '@/lib/storage';
 import { useSession } from '@/lib/session';
@@ -55,6 +55,17 @@ export default function EventsPage() {
   const [evImagePreview, setEvImagePreview] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [editingEvent, setEditingEvent] = useState<UniEvent | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
+  const [editImagePreview, setEditImagePreview] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deletingEvent, setDeletingEvent] = useState<UniEvent | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -119,6 +130,66 @@ export default function EventsPage() {
   const handleImageChange = (file: File | null) => {
     setEvImageFile(file);
     setEvImagePreview(file ? URL.createObjectURL(file) : null);
+  };
+
+  const openEditEvent = (event: UniEvent) => {
+    setEditingEvent(event);
+    setEditTitle(event.title);
+    setEditLocation(event.location);
+    setEditDate(event.event_date);
+    setEditTime(event.event_time);
+    setEditImageFile(null);
+    setEditImagePreview(event.image_url ?? null);
+    setEditError(null);
+  };
+
+  const handleUpdateEvent = async () => {
+    if (!editingEvent || !editTitle.trim() || !editLocation.trim() || !editDate || !editTime || editSaving) return;
+    setEditSaving(true);
+    setEditError(null);
+    let imageUrl = editingEvent.image_url ?? null;
+    if (editImageFile) {
+      const uploaded = await uploadImage(editImageFile, 'events');
+      if (!uploaded) {
+        setEditError('No se pudo subir la imagen. Inténtalo de nuevo.');
+        setEditSaving(false);
+        return;
+      }
+      imageUrl = uploaded;
+    }
+    const { error } = await supabase
+      .from('events')
+      .update({
+        title: editTitle.trim(),
+        location: editLocation.trim(),
+        event_date: editDate,
+        event_time: editTime,
+        image_url: imageUrl,
+      })
+      .eq('id', editingEvent.id);
+    setEditSaving(false);
+    if (error) {
+      setEditError('No se pudo guardar el evento. Inténtalo de nuevo.');
+      return;
+    }
+    setEvents((prev) =>
+      prev.map((e) =>
+        e.id === editingEvent.id
+          ? { ...e, title: editTitle.trim(), location: editLocation.trim(), event_date: editDate, event_time: editTime, image_url: imageUrl }
+          : e,
+      ),
+    );
+    setEditingEvent(null);
+  };
+
+  const handleDeleteEvent = async () => {
+    if (!deletingEvent || deleting) return;
+    setDeleting(true);
+    const { error } = await supabase.from('events').delete().eq('id', deletingEvent.id);
+    setDeleting(false);
+    if (error) return;
+    setEvents((prev) => prev.filter((e) => e.id !== deletingEvent.id));
+    setDeletingEvent(null);
   };
 
   const handleCreateEvent = async () => {

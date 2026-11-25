@@ -1,5 +1,6 @@
 import { Home, Users, CalendarDays, MessageCircle, Compass, Bot, Info, PenTool } from 'lucide-react';
 import type { TabKey } from '@/types';
+import { useUnread } from '@/lib/unread';
 
 interface SidebarProps {
   activeTab: TabKey;
@@ -10,17 +11,18 @@ interface SidebarProps {
   isCreator?: boolean;
 }
 
-const navItems: { key: TabKey; label: string; icon: typeof Home; description: string }[] = [
+const navItems: { key: TabKey; label: string; icon: typeof Home; description: string; studentOnly?: boolean }[] = [
   { key: 'inicio', label: 'Inicio', icon: Home, description: 'Muro y charla' },
   { key: 'grupos', label: 'Grupos', icon: Users, description: 'Comunidades' },
   { key: 'eventos', label: 'Eventos', icon: CalendarDays, description: 'Agenda' },
-  { key: 'chats', label: 'Chats', icon: MessageCircle, description: 'Mensajes' },
+  { key: 'chats', label: 'Chats', icon: MessageCircle, description: 'Mensajes', studentOnly: true },
   { key: 'explorar', label: 'Explorar', icon: Compass, description: 'Estudiantes' },
   { key: 'asistente', label: 'Asistente', icon: Bot, description: 'IA y ayuda' },
   { key: 'contacto', label: 'Quiénes Somos', icon: Info, description: 'Sobre el proyecto' },
 ];
 
 export default function Sidebar({ activeTab, onTabChange, isOpen, onClose, onLogoClick, isCreator = false }: SidebarProps) {
+  const { total: unreadChats } = useUnread();
   return (
     <>
       {isOpen && (
@@ -61,6 +63,7 @@ export default function Sidebar({ activeTab, onTabChange, isOpen, onClose, onLog
             {navItems.map((item) => {
               const Icon = item.icon;
               const active = activeTab === item.key;
+              if (item.studentOnly && isCreator) return null;
               return (
                 <button
                   key={item.key}
@@ -87,6 +90,13 @@ export default function Sidebar({ activeTab, onTabChange, isOpen, onClose, onLog
                   </div>
                   {active && (
                     <div className="h-1.5 w-1.5 rounded-full bg-crimson-500 animate-pulse-crimson" />
+                  )}
+                  {item.key === 'chats' && unreadChats > 0 && (
+                    <span className={`flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white ${
+                      active ? 'bg-crimson-600 ring-1 ring-white/40' : 'bg-crimson-500'
+                    }`}>
+                      {unreadChats > 99 ? '99+' : unreadChats}
+                    </span>
                   )}
                 </button>
               );

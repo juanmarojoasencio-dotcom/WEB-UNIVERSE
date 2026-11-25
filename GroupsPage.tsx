@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, UserPlus, Check, Loader2, Search, Plus, X, BookOpen, PartyPopper, MessagesSquare, MapPin, Dumbbell, Shapes } from 'lucide-react';
+import { Users, UserPlus, Check, Loader2, Search, Plus, X, BookOpen, PartyPopper, MessagesSquare, MapPin, Dumbbell, Shapes, MessagesSquare as ChatIcon } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/lib/session';
+import { joinGroupChat, leaveGroupChat } from '@/lib/chatHelpers';
+import { GroupMembersModal } from '@/pages/ChatsPage';
 import type { Group } from '@/types';
+
+interface GroupsPageProps {
+  onOpenGroupChat?: (chatId: string) => void;
+}
 
 const CATEGORIES = ['Todos', 'Apuntes y estudio', 'Planes y ocio', 'Charlas y debates', 'Quedadas', 'Deporte', 'Otros'];
 
@@ -28,15 +34,17 @@ const inputClass =
   'w-full rounded-xl border border-ink-700/30 bg-ink-850/50 px-4 py-3 text-sm text-ink-100 placeholder:text-ink-400 focus:outline-none focus:border-crimson-400/40';
 const labelClass = 'mb-1.5 block text-xs font-medium text-ink-300';
 
-export default function GroupsPage() {
+export default function GroupsPage({ onOpenGroupChat }: { onOpenGroupChat?: (chatId: string) => void }) {
   const { session, isCreator } = useSession();
   const myEmail = session?.email ?? '';
+  const isStudent = !isCreator;
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [joinedIds, setJoinedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState('Todos');
   const [search, setSearch] = useState('');
+  const [membersGroup, setMembersGroup] = useState<Group | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [gName, setGName] = useState('');
@@ -85,6 +93,7 @@ export default function GroupsPage() {
         .eq('group_id', group.id)
         .eq('user_email', myEmail);
       if (error) return;
+      await leaveGroupChat(group.id, myEmail);
       const newCount = Math.max(0, group.member_count - 1);
       await supabase.from('groups').update({ member_count: newCount }).eq('id', group.id);
       setJoinedIds((prev) => {
@@ -98,6 +107,7 @@ export default function GroupsPage() {
         .from('group_members')
         .insert({ group_id: group.id, user_email: myEmail });
       if (error) return;
+      await joinGroupChat(group.id, group.name, group.category, group.member_count + 1, myEmail);
       const newCount = group.member_count + 1;
       await supabase.from('groups').update({ member_count: newCount }).eq('id', group.id);
       setJoinedIds((prev) => new Set(prev).add(group.id));
@@ -129,6 +139,7 @@ export default function GroupsPage() {
     const groupId = data[0].id as string;
     if (myEmail) {
       await supabase.from('group_members').insert({ group_id: groupId, user_email: myEmail });
+      await joinGroupChat(groupId, gName.trim(), gCategory, 1, myEmail);
     }
     setCreating(false);
     setShowCreate(false);
@@ -158,14 +169,22 @@ export default function GroupsPage() {
             placeholder="Buscar grupos, comunidades..."
             className="flex-1 bg-transparent text-sm text-ink-100 placeholder:text-ink-400 focus:outline-none"
           />
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-gradient-to-r from-crimson-500 to-crimson-600 px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:from-crimson-400 hover:to-crimson-500"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Crear grupo
-          </button>
+          {isStudent && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-gradient-to-r from-crimson-500 to-crimson-600 px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:from-crimson-400 hover:to-crimson-500"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Crear grupo
+            </button>
+          )}
         </div>
+
+        {isCreator && (
+          <p className="rounded-xl border border-gold-400/30 bg-gold-400/10 px-4 py-2.5 text-xs text-gold-700">
+            Solo puedes unirte a grupos desde una sesión de Estudiante. Como Creador puedes consultarlos de forma informativa.
+          </p>
+        )}
 
         <div className="flex flex-wrap gap-2">
           {CATEGORIES.map((cat) => (
@@ -223,28 +242,42 @@ export default function GroupsPage() {
                 <p className="mt-3 text-sm leading-relaxed text-ink-400 line-clamp-2">{group.description}</p>
 
                 <div className="mt-4 flex items-center justify-between border-t border-ink-800/50 pt-4">
-                  <div className="flex items-center gap-1.5 text-xs text-ink-400">
-                    <Users className="h-3.5 w-3.5 text-crimson-500/70" />
-                    <span className="font-medium text-ink-200">{group.member_count}</span> miembros
-                  </div>
                   <button
-                    onClick={() => handleToggleJoin(group)}
-                    className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-                      joined
-                        ? 'bg-emerald-400/10 text-emerald-600 border border-emerald-400/30 hover:bg-emerald-400/20'
-                        : 'bg-crimson-500 text-white shadow-lg shadow-crimson-500/20 hover:bg-crimson-400'
-                    }`}
+                    onClick={() => setMembersGroup(group)}
+                    className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-ink-400 transition-colors hover:bg-ink-850/40 hover:text-crimson-600"
                   >
-                    {joined ? (
-                      <>
-                        <Check className="h-3.5 w-3.5" /> Unido
-                      </>
-                    ) : (
-                      <>
-                        <UserPlus className="h-3.5 w-3.5" /> Unirse
-                      </>
-                    )}
+                    <Users className="h-3.5 w-3.5 text-crimson-500/70" />
+                    <span className="font-medium text-ink-200">{group.member_count}</span> integrantes
                   </button>
+                  {isStudent ? (
+                    joined ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleToggleJoin(group)}
+                          className="flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-600 transition-all hover:bg-emerald-400/20"
+                        >
+                          <Check className="h-3.5 w-3.5" /> Unido
+                        </button>
+                        <button
+                          onClick={() => onOpenGroupChat?.(`grp_${group.id}`)}
+                          className="flex items-center gap-1.5 rounded-lg bg-crimson-500 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:bg-crimson-400"
+                        >
+                          <ChatIcon className="h-3.5 w-3.5" /> Abrir chat
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleToggleJoin(group)}
+                        className="flex items-center gap-1.5 rounded-lg bg-crimson-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-crimson-500/20 transition-all hover:bg-crimson-400"
+                      >
+                        <UserPlus className="h-3.5 w-3.5" /> Unirse al grupo
+                      </button>
+                    )
+                  ) : (
+                    <span className="rounded-lg border border-ink-700/30 bg-ink-850/30 px-3 py-2 text-[11px] text-ink-400">
+                      Solo estudiantes
+                    </span>
+                  )}
                 </div>
               </div>
             );
@@ -302,6 +335,14 @@ export default function GroupsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {membersGroup && (
+        <GroupMembersModal
+          chatId={`grp_${membersGroup.id}`}
+          groupName={membersGroup.name}
+          onClose={() => setMembersGroup(null)}
+        />
       )}
     </div>
   );

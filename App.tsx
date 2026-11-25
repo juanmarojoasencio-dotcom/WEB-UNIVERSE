@@ -14,6 +14,7 @@ import CreatorPanelPage from '@/pages/CreatorPanelPage';
 import OnboardingPage from '@/pages/OnboardingPage';
 import ExplorePage from '@/pages/ExplorePage';
 import { useLiveNotifications, NotificationToast } from '@/components/NotificationToast';
+import { UnreadProvider } from '@/lib/unread';
 import { Loader2 } from 'lucide-react';
 import type { TabKey } from '@/types';
 import {
@@ -34,13 +35,6 @@ import {
   type UserProfile,
 } from '@/lib/session';
 import { supabase } from '@/lib/supabase';
-
-export interface StartChatTarget {
-  chatId: string;
-  contactName: string;
-  contactAvatar: string;
-  contactFaculty: string;
-}
 
 const TAB_META: Record<TabKey, { title: string; subtitle: string }> = {
   inicio: {
@@ -88,7 +82,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('inicio');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toastNotif, setToastNotif] = useState<{ id: string; brand: string | null; title: string; message: string; image_url: string | null } | null>(null);
-  const [pendingChat, setPendingChat] = useState<StartChatTarget | null>(null);
+  const [pendingChatId, setPendingChatId] = useState<string | null>(null);
   const [profileChecked, setProfileChecked] = useState<boolean>(loadProfile() !== null);
 
   useLiveNotifications((n) => {
@@ -210,10 +204,11 @@ export default function App() {
     setActiveTab('inicio');
   }, []);
 
-  const handleStartChat = useCallback((target: StartChatTarget) => {
-    setPendingChat(target);
+  const handleStartChat = useCallback((chatId: string) => {
+    if (isCreator) return;
+    setPendingChatId(chatId);
     setActiveTab('chats');
-  }, []);
+  }, [isCreator]);
 
   if (!session) {
     return <LoginPage onVerified={handleSignIn} />;
@@ -242,8 +237,10 @@ export default function App() {
   }
 
   const meta = TAB_META[activeTab];
-  const chatsActive = activeTab === 'chats';
-  const isCreator = role === 'creator';
+  const chatsActive = activeTab === 'chats' && !isCreator;
+  if (activeTab === 'chats' && isCreator) {
+    setActiveTab('inicio');
+  }
 
   return (
     <SessionContext.Provider
@@ -257,8 +254,9 @@ export default function App() {
         signOut: handleSignOut,
       }}
     >
-      <div className="flex min-h-screen bg-ink-950">
-        <Sidebar
+      <UnreadProvider email={session.email}>
+        <div className="flex min-h-screen bg-ink-950">
+          <Sidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
           isOpen={sidebarOpen}
@@ -279,9 +277,9 @@ export default function App() {
 
           <main className={`flex-1 ${chatsActive ? 'overflow-hidden' : 'overflow-y-auto'}`}>
             {activeTab === 'inicio' && <FeedPage />}
-            {activeTab === 'grupos' && <GroupsPage />}
+            {activeTab === 'grupos' && <GroupsPage onOpenGroupChat={handleStartChat} />}
             {activeTab === 'eventos' && <EventsPage />}
-            {activeTab === 'chats' && <ChatsPage onNavigateGroups={() => setActiveTab('grupos')} onNavigateExplore={() => setActiveTab('explorar')} initialChat={pendingChat ?? undefined} onChatOpened={() => setPendingChat(null)} />}
+            {activeTab === 'chats' && <ChatsPage onNavigateGroups={() => setActiveTab('grupos')} onNavigateExplore={() => setActiveTab('explorar')} initialChatId={pendingChatId ?? undefined} onChatOpened={() => setPendingChatId(null)} />}
             {activeTab === 'explorar' && <ExplorePage onStartChat={handleStartChat} currentUserEmail={session.email} />}
             {activeTab === 'asistente' && <AssistantPage onNavigate={(tab) => setActiveTab(tab)} />}
             {activeTab === 'contacto' && <AboutPage />}
@@ -290,10 +288,11 @@ export default function App() {
           </main>
         </div>
 
-        {toastNotif && (
-          <NotificationToast notification={toastNotif} onClose={() => setToastNotif(null)} />
-        )}
-      </div>
+          {toastNotif && (
+            <NotificationToast notification={toastNotif} onClose={() => setToastNotif(null)} />
+          )}
+        </div>
+      </UnreadProvider>
     </SessionContext.Provider>
   );
 }

@@ -4,46 +4,46 @@ import { supabase } from '@/lib/supabase';
 
 const TEAM = [
   {
-    name: 'Sergio Bazán Fernández',
-    roles: ['Dirección general', 'Estrategia de negocio'],
-    bio: 'Lidera el proyecto y define la hoja de ruta de Uni verse. Negocia con empresas de ocio local para traer ofertas exclusivas a la comunidad.',
-    initials: 'SB',
-    color: 'from-crimson-400/20 to-crimson-500/5',
-  },
-  {
-    name: 'Sergio Fernández Montes',
-    roles: ['Desarrollo frontend', 'Optimización y rendimiento'],
-    bio: 'Construye la interfaz de Uni verse y se asegura de que todo funcione rápido y fluido en cualquier dispositivo.',
-    initials: 'SF',
-    color: 'from-sky-400/20 to-sky-500/5',
-  },
-  {
-    name: 'Iker Castell César',
-    roles: ['Desarrollo backend', 'Seguridad y base de datos'],
-    bio: 'Mantiene los datos seguros y la infraestructura estable. Detrás de cada publicación y mensaje que viaja por la red.',
-    initials: 'IC',
-    color: 'from-gold-400/20 to-gold-500/5',
-  },
-  {
-    name: 'Dana Jackeline García Rodríguez',
-    roles: ['Diseño UX/UI', 'Identidad visual de marca'],
-    bio: 'Diseña cada pantalla y cada detalle visual. La estética roja y dorada de Uni verse lleva su firma.',
-    initials: 'DG',
-    color: 'from-violet-400/20 to-violet-500/5',
-  },
-  {
     name: 'Juan Manuel Rojo Asencio',
-    roles: ['Marketing y comunidad', 'Relaciones con facultades'],
-    bio: 'Conecta Uni verse con delegaciones y asociaciones estudiantiles. Si tu facultad está en la app, es por él.',
+    roles: ['Programador web'],
+    bio: 'Desarrolla y mantiene la plataforma digital de Uni verse, asegurando que cada función de la app funcione de forma fluida.',
     initials: 'JR',
     color: 'from-emerald-400/20 to-emerald-500/5',
   },
   {
     name: 'Cristóbal Aunión Núñez',
-    roles: ['Gestión de contenidos', 'Eventos y patrocinios'],
-    bio: 'Coordina los eventos universitarios y gestiona las colaboraciones con empresas de ocio de Sevilla.',
+    roles: ['Subgerente de operaciones'],
+    bio: 'Coordina el día a día del proyecto, supervisando que todas las áreas funcionen en sincronía y cumpliendo los objetivos marcados.',
     initials: 'CA',
     color: 'from-crimson-400/20 to-gold-500/5',
+  },
+  {
+    name: 'Sergio Fernández Montes',
+    roles: ['Community manager'],
+    bio: 'Gestiona la presencia de Uni verse en redes sociales y mantiene viva la comunidad estudiantil en cada canal digital.',
+    initials: 'SF',
+    color: 'from-sky-400/20 to-sky-500/5',
+  },
+  {
+    name: 'Iker Castell César',
+    roles: ['Marketing y eventos'],
+    bio: 'Diseña y promueve las campañas de marketing y los eventos universitarios que conectan a la comunidad de Sevilla.',
+    initials: 'IC',
+    color: 'from-gold-400/20 to-gold-500/5',
+  },
+  {
+    name: 'Sergio Bazán Fernández',
+    roles: ['Coordinador principal'],
+    bio: 'Lidera el equipo y coordina todas las áreas del proyecto, desde la estrategia hasta la ejecución, manteniendo unido al grupo.',
+    initials: 'SB',
+    color: 'from-crimson-400/20 to-crimson-500/5',
+  },
+  {
+    name: 'Dana Jackeline García Rodríguez',
+    roles: ['Gestión de contenidos'],
+    bio: 'Crea y organiza los contenidos de Uni verse, cuidando cada detalle visual y editorial para ofrecer la mejor experiencia.',
+    initials: 'DG',
+    color: 'from-violet-400/20 to-violet-500/5',
   },
 ];
 

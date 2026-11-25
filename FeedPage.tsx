@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Heart, MessageCircle, Share2, Send, MapPin, Loader2, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { useSession } from '@/lib/session';
 import type { Post } from '@/types';
+
+interface PostWithLike extends Post {
+  is_liked_by_me: boolean;
+  like_count: number;
+}
 
 const FACULTIES = ['Todos', 'FCom', 'Reina Mercedes', 'Ramón y Cajal', 'Viapol', 'Cartuja'];
 
@@ -30,7 +36,9 @@ function getInitials(name: string): string {
 }
 
 export default function FeedPage() {
-  const [posts, setPosts] = useState<Post[]>([]);
+  const { session } = useSession();
+  const myEmail = session?.email ?? '';
+  const [posts, setPosts] = useState<PostWithLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('Todos');
   const [newPost, setNewPost] = useState('');
@@ -49,11 +57,36 @@ export default function FeedPage() {
       .order('created_at', { ascending: false });
     if (error) {
       console.error('Error fetching posts:', error);
-    } else if (data) {
-      setPosts(data as Post[]);
+      setLoading(false);
+      return;
     }
+    const rawPosts = (data ?? []) as Post[];
+    if (rawPosts.length === 0 || !myEmail) {
+      setPosts(rawPosts.map((p) => ({ ...p, is_liked_by_me: false, like_count: p.likes })));
+      setLoading(false);
+      return;
+    }
+    const { data: likesData } = await supabase
+      .from('post_likes')
+      .select('post_id')
+      .eq('user_email', myEmail)
+      .in('post_id', rawPosts.map((p) => p.id));
+    const likedIds = new Set((likesData ?? []).map((r) => r.post_id));
+    const { data: allLikes } = await supabase
+      .from('post_likes')
+      .select('post_id')
+      .in('post_id', rawPosts.map((p) => p.id));
+    const likeCounts: Record<string, number> = {};
+    (allLikes ?? []).forEach((r) => {
+      likeCounts[r.post_id] = (likeCounts[r.post_id] ?? 0) + 1;
+    });
+    setPosts(rawPosts.map((p) => ({
+      ...p,
+      is_liked_by_me: likedIds.has(p.id),
+      like_count: likeCounts[p.id] ?? p.likes,
+    })));
     setLoading(false);
-  }, []);
+  }, [myEmail]);
 
   useEffect(() => {
     fetchPosts();
@@ -69,25 +102,39 @@ export default function FeedPage() {
         author_faculty: postFaculty,
         content: newPost.trim(),
         likes: 0,
+        author_email: myEmail || null,
       })
       .select()
       .single();
     if (!error && data) {
-      setPosts((prev) => [data as Post, ...prev]);
+      const newPostData = data as Post;
+      setPosts((prev) => [{ ...newPostData, is_liked_by_me: false, like_count: 0 }, ...prev]);
       setNewPost('');
     }
     setPosting(false);
   };
 
-  const handleLike = async (post: Post) => {
-    const { error } = await supabase
-      .from('posts')
-      .update({ likes: post.likes + 1 })
-      .eq('id', post.id);
-    if (!error) {
-      setPosts((prev) =>
-        prev.map((p) => (p.id === post.id ? { ...p, likes: p.likes + 1 } : p))
-      );
+  const handleLike = async (post: PostWithLike) => {
+    if (!myEmail) return;
+    const liked = post.is_liked_by_me;
+    // Optimistic update
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === post.id
+          ? { ...p, is_liked_by_me: !liked, like_count: Math.max(0, p.like_count + (liked ? -1 : 1)) }
+          : p
+      )
+    );
+    if (liked) {
+      await supabase
+        .from('post_likes')
+        .delete()
+        .eq('post_id', post.id)
+        .eq('user_email', myEmail);
+    } else {
+      await supabase
+        .from('post_likes')
+        .insert({ post_id: post.id, user_email: myEmail });
     }
   };
 
@@ -218,10 +265,12 @@ export default function FeedPage() {
                 <div className="mt-4 flex items-center gap-1 border-t border-ink-800 pt-3">
                   <button
                     onClick={() => handleLike(post)}
-                    className="group flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-ink-400 transition-all hover:bg-crimson-400/10 hover:text-crimson-500"
+                    className={`group flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-all hover:bg-crimson-400/10 ${
+                      post.is_liked_by_me ? 'text-crimson-500' : 'text-ink-400 hover:text-crimson-500'
+                    }`}
                   >
-                    <Heart className="h-4 w-4 transition-transform group-hover:scale-110" />
-                    {post.likes}
+                    <Heart className={`h-4 w-4 transition-transform group-hover:scale-110 ${post.is_liked_by_me ? 'fill-crimson-500' : ''}`} />
+                    {post.like_count}
                   </button>
                   <button
                     onClick={() => setCommentingOn(commentingOn === post.id ? null : post.id)}
